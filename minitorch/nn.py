@@ -209,8 +209,20 @@ def GELU(input: Tensor) -> Tensor:
     """Applies the GELU activation function with 'tanh' approximation element-wise
     https://pytorch.org/docs/stable/generated/torch.nn.GELU.html
     """
-    # COPY FROM ASSIGN2_2
-    raise NotImplementedError
+    return 0.5 * input * (1 + (np.sqrt(2 / math.pi) * (input + 0.044715 * (input ** 3))).tanh())
+
+
+def one_hot(input: Tensor, num_classes: int) -> Tensor:
+    """Takes a Tensor containing indices of shape (*) and returns a tensor of shape (*, num_classes) 
+    that contains zeros except a 1 where the index of last dimension matches the corresponding value of the input tensor.
+    This is analogous to torch.nn.functional.one_hot (which contains helpful examples you may want to play around with)
+
+    Hint: You may want to use a combination of np.eye, tensor_from_numpy, 
+    """
+    return tensor_from_numpy(
+                np.eye(num_classes)[input.to_numpy().astype(int)], 
+                backend=input.backend
+            )
 
 
 def logsumexp(input: Tensor, dim: int) -> Tensor:
@@ -225,19 +237,10 @@ def logsumexp(input: Tensor, dim: int) -> Tensor:
         out : The output tensor with the same number of dimensions as input (equiv. to keepdims=True)
             NOTE: minitorch functions/tensor functions typically keep dimensions if you provide a dimensions.
     """  
-    # COPY FROM ASSIGN2_2
-    raise NotImplementedError
-
-
-def one_hot(input: Tensor, num_classes: int) -> Tensor:
-    """Takes a Tensor containing indices of shape (*) and returns a tensor of shape (*, num_classes) 
-    that contains zeros except a 1 where the index of last dimension matches the corresponding value of the input tensor.
-    This is analogous to torch.nn.functional.one_hot (which contains helpful examples you may want to play around with)
-
-    Hint: You may want to use a combination of np.eye, tensor_from_numpy, 
-    """
-    # COPY FROM ASSIGN2_2
-    raise NotImplementedError
+    ### BEGIN ASSIGN3_1
+    mx = max(input, dim=dim)
+    return (input - mx).exp().sum(dim=dim).log() + mx
+    ### END ASSIGN3_1
 
 
 def softmax_loss(logits: Tensor, target: Tensor) -> Tensor:
@@ -252,8 +255,10 @@ def softmax_loss(logits: Tensor, target: Tensor) -> Tensor:
         loss : (minibatch, )
     """
     result = None
+    batch_size, c = logits.shape[0], logits.shape[1]
     
-    # COPY FROM ASSIGN2_2
-    raise NotImplementedError
-    
-    return result.view(batch_size, )
+    ### BEGIN ASSIGN3_1
+    mask = one_hot(target, c)
+    result = logsumexp(logits, dim=1) - (logits*mask).sum(dim=1)
+    ### END ASSIGN3_1
+    return result.view(batch_size,)
