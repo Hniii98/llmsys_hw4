@@ -28,7 +28,7 @@ def test_launch_attn_softmax():
       from_len = 1
       beam_size = np.random.choice([3, 4, 5])
       batch_size *= beam_size
-
+  to_len=4
   nhead = kt.nhead
   print(
       "(batch_size, nhead, from_len, to_len, is_dec_self_attn,"

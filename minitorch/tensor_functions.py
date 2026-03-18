@@ -390,7 +390,8 @@ class Attn_Softmax(Function):
     @staticmethod
     def backward(ctx: Context, out_grad: Tensor) -> Tensor:
       #   BEGIN ASSIGN4_1_2
-      raise NotImplementedError("Need to implement for Assignment 3")
+      inp = ctx.saved_values
+      return out_grad.f.attn_softmax_bw(out_grad, inp)
       #   END ASSIGN4_1_2
 
 
