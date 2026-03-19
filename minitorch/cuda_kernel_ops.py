@@ -409,16 +409,16 @@ class CudaKernelOps(TensorOps):
       batch_size, nhead, seq_len, _ = soft_inp.shape
       stream = torch.cuda.current_stream().cuda_stream
 
-      lib_softmax.lauch_attn_softmax_bw.argtypes = [
+      lib_softmax.launch_attn_softmax_bw.argtypes = [
           np.ctypeslib.ndpointer(dtype=datatype, ndim=1, flags='C_CONTIGUOUS'),
           np.ctypeslib.ndpointer(dtype=datatype, ndim=1, flags='C_CONTIGUOUS'),
           ctypes.c_int,
           ctypes.c_int,
           ctypes.c_void_p
       ]
-      lib_softmax.lauch_attn_softmax_bw.restype = None
+      lib_softmax.launch_attn_softmax_bw.restype = None
 
-      lib_softmax.lauch_attn_softmax_bw(
+      lib_softmax.launch_attn_softmax_bw(
           out_grad._tensor._storage,
           soft_inp._tensor._storage,
           batch_size*nhead*seq_len,
@@ -431,8 +431,40 @@ class CudaKernelOps(TensorOps):
 
     @staticmethod
     def layernorm_fw(inp: Tensor, gamma: Tensor, beta: Tensor):
-      #   BEGIN ASSIGN4_2_1
-      raise("Not implemented")
+     #   BEGIN ASSIGN4_2_1
+      batch_size, hidden_size = inp.shape
+      stream =torch.cuda.current_stream().cuda_stream
+      
+      means = np.zeros(batch_size, dtype=datatype)
+      vars = np.zeros(batch_size, dtype=datatype)
+
+      lib_layernorm.launch_layernorm.argtypes = [
+        np.ctypeslib.ndpointer(dtype=datatype, ndim=1, flags='C_CONTIGUOUS'),
+        np.ctypeslib.ndpointer(dtype=datatype, ndim=1, flags='C_CONTIGUOUS'),
+        np.ctypeslib.ndpointer(dtype=datatype, ndim=1, flags='C_CONTIGUOUS'),
+        np.ctypeslib.ndpointer(dtype=datatype, ndim=1, flags='C_CONTIGUOUS'),
+        np.ctypeslib.ndpointer(dtype=datatype, ndim=1, flags='C_CONTIGUOUS'),
+        np.ctypeslib.ndpointer(dtype=datatype, ndim=1, flags='C_CONTIGUOUS'),
+        ctypes.c_int,
+        ctypes.c_int,
+        ctypes.c_void_p
+      ]
+
+      lib_layernorm.launch_layernorm.restype = None
+
+      lib_layernorm.launch_layernorm(
+        inp._tensor._storage,
+        vars, # Get vars from kernel if not None.
+        means, # Get means from kernel if not None.
+        inp._tensor._storage,
+        gamma._tensor._storage,
+        beta._tensor._storage,
+        batch_size,
+        hidden_size,
+        stream
+      )
+
+      return inp, tensor_from_numpy(vars), tensor_from_numpy(means)  
       #   END ASSIGN4_2_1
       
     @staticmethod

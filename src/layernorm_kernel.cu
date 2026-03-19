@@ -46,17 +46,51 @@ __global__ void ker_layer_norm(T *ln_res, T *vars, T *means, const T *inp,
   
   // Step 1
   float l_sum = 0;
+  float l_sum_square = 0;
   const float4 *inp_f4 = reinterpret_cast<const float4 *>(inp) + blockIdx.x * hidden_size;  
   for (uint idx = threadIdx.x; idx < hidden_size; idx += blockDim.x) {
     float4 val = inp_f4[idx];
     l_sum += val.x + val.y + val.z + val.w;
+    l_sum_square += val.x * val.x + val.y * val.y + val.z * val.z + val.w * val.w;
   }
-
+  
   // Step 2
+  // Block reduce sum and sum square
+  blockReduce<ReduceType::kSum, 1>(&l_sum);
+  blockReduce<ReduceType::kSum, 1>(&l_sum_square);
+
+  //  Write shared
+  __shared__ float s_means;
+  __shared__ float s_inv_stds;
+  if(threadIdx.x == 0) {
+    float l_means = __fdividef(l_sum, hidden_size << 2);
+    float l_vars = __fdividef(l_sum_square, hidden_size << 2) - l_means * l_means; // var = mean(x^2) - mean(x)^2
+    s_means = l_means;
+    s_inv_stds = rsqrtf(l_vars + LN_EPSILON);
+
+    // Write vars and means if poninter is not nullptr.
+    if (vars) vars[blockIdx.x] = (T)l_vars;
+    if (means) means[blockIdx.x] = (T)l_means;
+  }
+  __syncthreads(); 
 
   // Step 3
-  
-  assert(false && "Not Implemented");
+  float4 *ln_res_f4 = reinterpret_cast<float4 *>(ln_res) + blockIdx.x * hidden_size;
+  const float4 *scale_f4 = reinterpret_cast<const float4 *>(scale);
+  const float4 *bias_f4 = reinterpret_cast<const float4 *>(bias);
+
+  for(uint idx = threadIdx.x; idx < hidden_size; idx += blockDim.x) {
+      float4 res;
+      float4 val = inp_f4[idx];
+      float4 l_scale = scale_f4[idx]; 
+      float4 l_bias = bias_f4[idx];    
+      
+      res.x = l_scale.x * ((val.x - s_means) * s_inv_stds) + l_bias.x;
+      res.y = l_scale.y * ((val.y - s_means) * s_inv_stds) + l_bias.y;
+      res.z = l_scale.z * ((val.z - s_means) * s_inv_stds) + l_bias.z;
+      res.w = l_scale.w * ((val.w - s_means) * s_inv_stds) + l_bias.w;
+      ln_res_f4[idx] = res;
+  }
   /// END ASSIGN4_2_1
 }
 
