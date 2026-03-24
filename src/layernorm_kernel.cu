@@ -211,16 +211,86 @@ __global__ void ker_ln_bw_dgamma_dbetta(T *gamma_grad, T *betta_grad,
   cg::thread_block b = cg::this_thread_block();
   cg::thread_block_tile<TILE_DIM> g = cg::tiled_partition<TILE_DIM>(b);
 
+  int idx_in_hori = blockIdx.x;
+  int tx = threadIdx.x, ty = threadIdx.y;
+  int steps = (rows + TILE_DIM - 1) / TILE_DIM; // Compute stride steps in vertical.
+  int curr_col = idx_in_hori * TILE_DIM + tx; // Every thread compute partial of a column.
+
   // Step 1
+  float l_sum_dout = 0;
+  float l_sum_dout_mul_xhat = 0;
+  // Looping rows to compute local sum                                     
+  for(int st = 0; st < steps; st++){
+    int curr_row = ty + TILE_DIM * st;
+
+    if(curr_row < rows && curr_col < width) {
+      // Reading in row-major 
+      float dout = (float)out_grad[curr_row * width + curr_col];
+      l_sum_dout += dout;
+      
+      float xhat;
+      if(means) {
+        float input = (float)inp[curr_row * width + curr_col];
+        xhat = (input- (float)means[curr_row]) * rsqrtf((float)vars[curr_row] + LN_EPSILON);
+      } else {
+        float output = (float)inp[curr_row * width + curr_col];
+        xhat = __fdividef(output - (float)betta[curr_col], (float)gamma[curr_col]);
+      }
+
+      l_sum_dout_mul_xhat += dout * xhat;
+    }  
+  }
 
   // Step 2
-  
-  // Step 3
-  
-  // Step 4
+  if(curr_col < width) {
+    // Store partial sum in shared memory in col-major way.
+    betta_buffer[tx][ty] = l_sum_dout;
+    gamma_buffer[tx][ty] = l_sum_dout_mul_xhat;
+  } else {
+    betta_buffer[tx][ty] = 0;
+    gamma_buffer[tx][ty] = 0;
+  }
+  __syncthreads(); 
 
-  assert(false && "Not Implemented");
+  // Step 3
+  float sum_dout = betta_buffer[ty][tx];
+  float sum_dout_mul_xhat = gamma_buffer[ty][tx];
+
+  #pragma unroll
+  for(int i = TILE_DIM / 2; i > 0; i >>= 1) {  
+    // Reduce sum in warp
+    sum_dout += g.shfl_down(sum_dout, i);
+    sum_dout_mul_xhat += g.shfl_down(sum_dout_mul_xhat, i);
+  }
+
+  // Step 4
+  if(g.thread_rank() == 0) {
+    // Write back to global, lan0 0 for wrting tx col
+    int col_idx = idx_in_hori * TILE_DIM + ty;
+    if (col_idx < width) {
+      betta_grad[col_idx] = (T) sum_dout;
+      gamma_grad[col_idx] = (T) sum_dout_mul_xhat;
+    }
+  }
   /// END ASSIGN4_2_2
+}
+
+/**
+@brief: helper fucntion for ker_ln_bw_dinp
+*/
+__device__ __forceinline__ float4 compute_dxhat_f4(float4 out_grad, float4 gamma) {
+  return make_float4(out_grad.x * gamma.x, out_grad.y * gamma.y, out_grad.z * gamma.z, 
+                     out_grad.w * gamma.w);
+}
+
+__device__ __forceinline__ float4 compute_xhat_f4_from_input(float4 input, float mean, float var){
+  return make_float4((input.x - mean) * rsqrtf(var + LN_EPSILON), (input.y - mean) * rsqrtf(var + LN_EPSILON),
+                     (input.z - mean) * rsqrtf(var + LN_EPSILON), (input.w - mean) * rsqrtf(var + LN_EPSILON));
+}
+
+__device__ __forceinline__ float4 compute_xhat_f4_from_output(float4 output, float4 gamma, float4 betta) {
+  return make_float4(__fdividef(output.x - betta.x, gamma.x), __fdividef(output.y - betta.y, gamma.y),
+                     __fdividef(output.z - betta.z, gamma.z), __fdividef(output.w - betta.w, gamma.w));
 }
 
 /**
@@ -265,16 +335,87 @@ __global__ void ker_ln_bw_dinp(T *inp_grad, const T *out_grad, const T *inp,
   // 2. Compute xhat with reinterpret_cast by casting to float4 for speedup
   // 3. Compute reduce sum for dxhat and dxhat*xhat with blockReduce
   // 4. Compute final gradient
+  const float4 *out_grad_f4 = reinterpret_cast<const float4 *>(out_grad) + blockIdx.x * hidden_dim;
+  const float4 *gamma_f4 = reinterpret_cast<const float4 *>(gamma);
+  const float4 *betta_f4 = reinterpret_cast<const float4 *>(betta);
+  const float *mean = (means != nullptr) ?
+                       means + blockIdx.x :
+                       nullptr;
   
+  const float *var =  vars + blockIdx.x;
+  const float4 *inp_f4 = reinterpret_cast<const float4 *>(inp) + blockIdx.x * hidden_dim;
+
+  int tx = threadIdx.x;
   // Step 1
- 
+  float4 dxhat = {0};
+
+  if(tx < hidden_dim) {
+    float4 l_out_grad = out_grad_f4[tx];
+    float4 l_gamma = gamma_f4[tx];
+    dxhat = compute_dxhat_f4(l_out_grad, l_gamma);
+  }
+  
   // Step 2
-   
+  float4 xhat = {0};
+
+  if(tx < hidden_dim) {
+    if(mean) {
+      float4 l_input = inp_f4[tx];
+      float m = *mean;
+      float v = *var;
+
+      xhat = compute_xhat_f4_from_input(l_input, m, v);
+    } else {
+      float4 l_output = inp_f4[tx];
+      float4 l_betta = betta_f4[tx];
+      float4 l_gamma = gamma_f4[tx];
+
+      xhat = compute_xhat_f4_from_output(l_output, l_gamma, l_betta);
+    }
+  }
+
   // Step 3
+  float l_sum_dxhat = 0;
+  float l_sum_dxhat_mul_xhat = 0;
+
+  if(tx < hidden_dim) {
+    l_sum_dxhat += (dxhat.x + dxhat.y + dxhat.z + dxhat.w);
+    l_sum_dxhat_mul_xhat += (dxhat.x * xhat.x + 
+                             dxhat.y * xhat.y + 
+                             dxhat.z * xhat.z + 
+                             dxhat.w * xhat.w);
+  }
+  
+  
+  __shared__ float s_sum_dxhat;
+  __shared__ float s_sum_dxhat_mul_xhat;
+  
+  blockReduce<ReduceType::kSum, 1>(&l_sum_dxhat);
+  blockReduce<ReduceType::kSum, 1>(&l_sum_dxhat_mul_xhat);
+  
+  if(threadIdx.x == 0){
+    s_sum_dxhat = l_sum_dxhat;
+    s_sum_dxhat_mul_xhat = l_sum_dxhat_mul_xhat;
+  }
+  __syncthreads();
  
   // Step 4
+  if(tx < hidden_dim) {
+    float4 res;
+    float v = *var;
+    res.x = (dxhat.x - __fdividef(s_sum_dxhat + xhat.x * s_sum_dxhat_mul_xhat, hidden_dim << 2)) * 
+           rsqrtf(v + LN_EPSILON);
+    res.y = (dxhat.y - __fdividef(s_sum_dxhat + xhat.y * s_sum_dxhat_mul_xhat, hidden_dim << 2)) * 
+           rsqrtf(v + LN_EPSILON);
+    res.z = (dxhat.z - __fdividef(s_sum_dxhat + xhat.z * s_sum_dxhat_mul_xhat, hidden_dim << 2)) * 
+           rsqrtf(v + LN_EPSILON);
+    res.w = (dxhat.w - __fdividef(s_sum_dxhat + xhat.w * s_sum_dxhat_mul_xhat, hidden_dim << 2)) * 
+           rsqrtf(v + LN_EPSILON);
+
+    float4 * inp_grad_f4 = reinterpret_cast<float4 *>(inp_grad) + blockIdx.x * hidden_dim;
+    inp_grad_f4[tx] = res;
+  }
   
-  assert(false && "Not Implemented");
   /// END ASSIGN4_2_2
 }
 extern "C" {
@@ -283,6 +424,13 @@ void launch_layernorm_bw(float *gamma_grad, float *betta_grad, float *inp_grad,
                          const float *betta, const float *vars,
                          const float *means, int batch_size, int hidden_dim,
                          cudaStream_t stream_1, cudaStream_t stream_2) {
+  
+  // Create CUDA events for timing
+  // cudaEvent_t start, stop, start_dinp, stop_dinp;
+  // cudaEventCreate(&start);
+  // cudaEventCreate(&stop);
+  // cudaEventCreate(&start_dinp);
+  // cudaEventCreate(&stop_dinp);
   
   // Allocate device memory
   float *d_gamma_grad, *d_betta_grad, *d_inp_grad, *d_out_grad, *d_inp, *d_gamma, *d_betta, *d_vars, *d_means;
@@ -313,9 +461,16 @@ void launch_layernorm_bw(float *gamma_grad, float *betta_grad, float *inp_grad,
   // This calculates the number of blocks needed to cover the data along the specified dimension, rounds it up.
   dim3 grid_dim((hidden_dim + TILE_DIM - 1) / TILE_DIM);
   dim3 block_dim(TILE_DIM, TILE_DIM);
+  
+  //cudaEventRecord(start, stream_1);
   ker_ln_bw_dgamma_dbetta<float><<<grid_dim, block_dim, 0, stream_1>>>(
       d_gamma_grad, d_betta_grad, d_out_grad, d_inp, d_gamma, d_betta, d_vars,
       d_means, batch_size, hidden_dim);
+  //cudaEventRecord(stop, stream_1);
+  //cudaStreamSynchronize(stream_1);
+  
+  //float gamma_beta_ms = 0;
+  //cudaEventElapsedTime(&gamma_beta_ms, start, stop);
 
   // Compute grad of input
   if (hidden_dim % 4 != 0 || hidden_dim > 4096) {
@@ -323,8 +478,18 @@ void launch_layernorm_bw(float *gamma_grad, float *betta_grad, float *inp_grad,
   }
   hidden_dim >>= 2;
   int nthread = min(((hidden_dim + 31) / 32) * 32, MAX_THREADS);
+  
+  //cudaEventRecord(start_dinp, stream_2);
   ker_ln_bw_dinp<<<batch_size, nthread, 0, stream_2>>>(
       d_inp_grad, d_out_grad, d_inp, d_gamma, d_betta, d_vars, d_means, hidden_dim);
+  //cudaEventRecord(stop_dinp, stream_2);
+  //cudaStreamSynchronize(stream_2);
+  
+  //float dinp_ms = 0;
+  //cudaEventElapsedTime(&dinp_ms, start_dinp, stop_dinp);
+  
+  // printf("[Timing] Gamma/Beta kernel: %.3f ms, Dinp kernel: %.3f ms, Total: %.3f ms\n",
+  //        gamma_beta_ms, dinp_ms, gamma_beta_ms + dinp_ms);
 
   // Synchronize and check for errors
   cudaDeviceSynchronize();
@@ -349,5 +514,11 @@ void launch_layernorm_bw(float *gamma_grad, float *betta_grad, float *inp_grad,
   cudaFree((void *)d_betta);
   cudaFree((void *)d_vars);
   cudaFree((void *)d_means);
+  
+  // // Destroy CUDA events
+  // cudaEventDestroy(start);
+  // cudaEventDestroy(stop);
+  // cudaEventDestroy(start_dinp);
+  // cudaEventDestroy(stop_dinp);
 }}
 }}
