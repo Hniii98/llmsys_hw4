@@ -402,9 +402,10 @@ class LayerNorm(Function):
     @staticmethod
     def forward(ctx: Context, inp: Tensor, gamma: Tensor, beta: Tensor) -> Tensor:
       #   BEGIN ASSIGN4_2_1
-      ctx.save_for_backward(inp, gamma, beta)
-      inp, _, _ = inp.f.layernorm_fw(inp, gamma, beta)
-      return inp
+      
+      output, means, vars = inp.f.layernorm_fw(inp, gamma, beta)
+      ctx.save_for_backward(inp, gamma, beta, means, vars)
+      return output
       #   END ASSIGN4_2_1
 
     @staticmethod

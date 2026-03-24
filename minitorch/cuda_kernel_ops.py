@@ -433,10 +433,13 @@ class CudaKernelOps(TensorOps):
     def layernorm_fw(inp: Tensor, gamma: Tensor, beta: Tensor):
      #   BEGIN ASSIGN4_2_1
       batch_size, hidden_size = inp.shape
+      
       stream =torch.cuda.current_stream().cuda_stream
       
-      means = np.zeros(batch_size, dtype=datatype)
-      vars = np.zeros(batch_size, dtype=datatype)
+      means = inp.zeros((batch_size,))
+      vars = inp.zeros((batch_size,))
+
+      output = inp.zeros(inp.shape)
 
       lib_layernorm.launch_layernorm.argtypes = [
         np.ctypeslib.ndpointer(dtype=datatype, ndim=1, flags='C_CONTIGUOUS'),
@@ -453,9 +456,9 @@ class CudaKernelOps(TensorOps):
       lib_layernorm.launch_layernorm.restype = None
 
       lib_layernorm.launch_layernorm(
-        inp._tensor._storage,
-        vars, # Get vars from kernel if not None.
-        means, # Get means from kernel if not None.
+        output._tensor._storage,
+        vars._tensor._storage, # Get vars from kernel if not None.
+        means._tensor._storage, # Get means from kernel if not None.
         inp._tensor._storage,
         gamma._tensor._storage,
         beta._tensor._storage,
@@ -464,7 +467,7 @@ class CudaKernelOps(TensorOps):
         stream
       )
 
-      return inp, tensor_from_numpy(vars), tensor_from_numpy(means)  
+      return output, means, vars
       #   END ASSIGN4_2_1
       
     @staticmethod
