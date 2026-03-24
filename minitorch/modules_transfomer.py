@@ -1,5 +1,7 @@
 import numpy as np
 from .tensor import tensor, tensor_from_numpy
+from .tensor_functions import (zeros, ones, rand, tensor, tensor_from_numpy, zeros_tensor_from_numpy, ones_tensor_from_numpy)
+
 from .module import Module, Parameter
 from .modules_basic import (
     Embedding,
@@ -108,24 +110,32 @@ class MultiHeadAttention(Module):
         _, _, _, v_dim = v.shape
         assert q_dim == k_dim == v_dim
         result = None
-        
+
+        inv = 1.0 / (self.attn_hidden_dim ** 0.5)
+        logits = (q @ kT) * inv
+        score = None
         if not self.use_fused_kernel:
             # COPY FROM ASSIGN2_4
-            inv = 1.0 / (self.attn_hidden_dim ** 0.5)
-            logits = (q @ kT) * inv
             if self.causal:
-                mask = self.create_causal_mask(queries_len)
+                mask = self.create_causal_mask(batch_size, num_head, queries_len)
                 logits = logits + mask
             score = softmax(logits, dim=3)
-            score = self.dropout(score)
-            probs = score @ v
-            probs = probs.permute(0, 2, 1, 3).contiguous()
-            result = probs.view(batch_size, queries_len, self.n_embd)
         else:
             # BEGIN ASSIGN3_3
-            raise NotImplementedError
+            if self.causal:
+                mask = self.create_causal_mask(queries_len)
+            else:
+                mask = tensor_from_numpy(
+                    np.zeros((batch_size, num_head, queries_len, queries_len), dtype=datatype),
+                    backend=self.backend
+                )
+            score = logits.attn_softmax(mask)
             # END ASSIGN3_3
 
+        score = self.dropout(score)
+        probs = score @ v
+        probs = probs.permute(0, 2, 1, 3).contiguous()
+        result = probs.view(batch_size, queries_len, self.n_embd)
         return result
 
     def forward(self, x):
@@ -217,7 +227,12 @@ class TransformerLayer(Module):
             self.ln_2 = LayerNorm1d(n_embd, eps=ln_eps, backend=backend)
         else:
             # BEGIN ASSIGN3_3
-            raise NotImplementedError
+            self.ln_1_gamma = Parameter(ones(shape=(n_embd,), backend=backend))
+            self.ln_2_gamma = Parameter(ones(shape=(n_embd,), backend=backend))
+
+            self.ln_1_beta = Parameter(zeros(shape=(n_embd,), backend=backend))
+            self.ln_2_beta = Parameter(zeros(shape=(n_embd,), backend=backend))
+
             # END ASSIGN3_3
 
     def forward(self, x):
@@ -230,16 +245,26 @@ class TransformerLayer(Module):
         
         if not self.use_fused_kernel:
             # COPY FROM ASSIGN2_4
-            x1 = self.ln_1(x.view(batch_size*seq_len, n_embd))
-            x1 = self.attention(x1.view(batch_size, seq_len, n_embd))
+            x1 = self.ln_1(x.view(batch_size*seq_len, x_dim))
+            x1 = self.attention(x1.view(batch_size, seq_len, x_dim))
             x = x + x1
 
-            x2 = self.ln_2(x.view(batch_size*seq_len, n_embd))
-            x2 = self.ff(x2.view(batch_size, seq_len, n_embd))
+            x2 = self.ln_2(x.view(batch_size*seq_len, x_dim))
+            x2 = self.ff(x2.view(batch_size, seq_len, x_dim))
             x = x + x2
         else:
             # BEGIN ASSIGN3_3
-            raise NotImplementedError
+            x1 = x.view(batch_size*seq_len, x_dim).layernorm(
+                self.ln_1_gamma.value, self.ln_1_beta.value
+            )
+            x1 = self.attention(x1.view(batch_size, seq_len, x_dim))
+            x = x + x1
+
+            x2 = x.view(batch_size*seq_len, x_dim).layernorm(
+                self.ln_2_gamma.value, self.ln_2_beta.value
+            )
+            x2 = self.attention(x2.view(batch_size, seq_len, x_dim))
+            x = x + x2
             # END ASSIGN3_3
 
         return x
@@ -303,7 +328,8 @@ class DecoderLM(Module):
 
         else:
             # BEGIN ASSIGN3_3
-            raise NotImplementedError
+            self.ln_gamma = Parameter(ones(shape=n_embd,), backend=backend)
+            self.ln_beta = Parameter(zeros(shape=n_embd,), backend=backend)
             # END ASSIGN3_3
         
     def forward(self, idx):
@@ -318,22 +344,23 @@ class DecoderLM(Module):
         batch_size, seq_len = idx.shape
         pos = tensor([i for i in range(seq_len)], backend=self.backend).view(1, seq_len)
 
+        token_embd = self.token_embeddings(idx)
+        pos_embd = self.position_embeddings(pos)
+        x = token_embd + pos_embd
+        x = self.dropout(x)
+        x = self.t_layer_1(x)
+        x = self.t_layer_2(x)
+        x = self.t_layer_3(x)
+        x = self.t_layer_4(x)
         if not self.use_fused_kernel:
             # COPY FROM ASSIGN2_4
-            token_embd = self.token_embeddings(idx)
-            pos_embd = self.position_embeddings(pos)
-            x = token_embd + pos_embd
-            x = self.dropout(x)
-            x = self.t_layer_1(x)
-            x = self.t_layer_2(x)
-            x = self.t_layer_3(x)
-            x = self.t_layer_4(x)
             x = self.ln(x.view(batch_size*seq_len, self.n_embd))
-            x = self.lm_head(x)
-            x = x.view(batch_size, seq_len, self.n_vocab)
         else:
             # BEGIN ASSIGN3_3
-            raise NotImplementedError
+            x = x.view(batch_size*seq_len, self.n_embd).layernorm(
+                self.ln_gamma.value, self.ln_beta.value
+            )
             # END ASSIGN3_3
-
+        x = self.lm_head(x)
+        x = x.view(batch_size, seq_len, self.n_vocab)
         return x
