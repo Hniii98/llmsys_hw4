@@ -1,0 +1,18 @@
+# Python 缓存
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.so
+*.bin
+
+# CUDA 编译文件
+minitorch/cuda_kernels/*.so
+
+# 虚拟环境
+.venv/
+env/
+
+# 日志
+*.log
+.DS_Store
