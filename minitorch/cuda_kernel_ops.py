@@ -511,8 +511,8 @@ class CudaKernelOps(TensorOps):
         mean._tensor._storage,
         batch_size,
         hidden_size,
-        stream_1,
-        stream_2
+        stream_1_handle,
+        stream_1_handle
       )
 
       return inp_grad, gamma_grad, beta_grad
