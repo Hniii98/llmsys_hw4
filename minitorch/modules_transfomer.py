@@ -328,8 +328,8 @@ class DecoderLM(Module):
 
         else:
             # BEGIN ASSIGN3_3
-            self.ln_gamma = Parameter(ones(shape=n_embd,), backend=backend)
-            self.ln_beta = Parameter(zeros(shape=n_embd,), backend=backend)
+            self.ln_gamma = Parameter(ones(shape=(n_embd,), backend=backend))
+            self.ln_beta = Parameter(zeros(shape=(n_embd,), backend=backend))
             # END ASSIGN3_3
         
     def forward(self, idx):
