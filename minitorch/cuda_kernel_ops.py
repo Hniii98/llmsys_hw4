@@ -474,8 +474,8 @@ class CudaKernelOps(TensorOps):
     def layernorm_bw(out_grad: Tensor, inp: Tensor, gamma: Tensor, beta: Tensor, var: Tensor, mean: Tensor):
       #   BEGIN ASSIGN4_2_2
       batch_size, hidden_size = out_grad.shape
-      stream_1 = torch.cuda.current_stream().cuda_stream
-      stream_2 = torch.cuda.Stream().cuda_stream
+      stream_1 = torch.cuda.current_stream()
+      stream_1_handle = stream_1.cuda_stream
 
       inp_grad = out_grad.zeros(out_grad.shape)
       gamma_grad = out_grad.zeros(gamma.shape)
