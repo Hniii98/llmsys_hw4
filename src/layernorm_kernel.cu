@@ -56,21 +56,23 @@ __global__ void ker_layer_norm(T *ln_res, T *vars, T *means, const T *inp,
   
   // Step 2
   // Block reduce sum and sum square
-  blockReduce<ReduceType::kSum, 1>(&l_sum);
-  blockReduce<ReduceType::kSum, 1>(&l_sum_square);
+  float mean_dim = (float)hidden_size * 4.f;
+  float reduce_val[2] = {l_sum, l_sum_square};
+  blockReduce<ReduceType::kSum, 2>(reduce_val);
 
   //  Write shared
   __shared__ float s_means;
   __shared__ float s_inv_stds;
-  if(threadIdx.x == 0) {
-    float l_means = __fdividef(l_sum, hidden_size << 2);
-    float l_vars = __fdividef(l_sum_square, hidden_size << 2) - l_means * l_means; // var = mean(x^2) - mean(x)^2
-    s_means = l_means;
-    s_inv_stds = rsqrtf(l_vars + LN_EPSILON);
 
-    // Write vars and means if poninter is not nullptr.
-    if (vars) vars[blockIdx.x] = (T)l_vars;
-    if (means) means[blockIdx.x] = (T)l_means;
+  if(threadIdx.x == 0) {
+    s_means = reduce_val[0] / mean_dim;
+    if (means != nullptr) {
+      means[blockIdx.x] = s_means;
+    }
+    float s_var = reduce_val[1] / mean_dim - s_means * s_means + LN_EPSILON;
+    vars[blockIdx.x] = s_var;
+    s_inv_stds = rsqrtf(s_var);
+    
   }
   __syncthreads(); 
 
@@ -522,3 +524,4 @@ void launch_layernorm_bw(float *gamma_grad, float *betta_grad, float *inp_grad,
   // cudaEventDestroy(stop_dinp);
 }}
 }}
+
