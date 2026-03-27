@@ -397,7 +397,8 @@ class Attn_Softmax(Function):
     def backward(ctx: Context, out_grad: Tensor) -> Tensor:
       #   BEGIN ASSIGN4_1_2
       (inp,) = ctx.saved_values
-      return out_grad.f.attn_softmax_bw(out_grad, inp), None
+      # 0.0 represent gradient of mask which means do not need
+      return out_grad.f.attn_softmax_bw(out_grad, inp), 0.0 
       #   END ASSIGN4_1_2
 
 
